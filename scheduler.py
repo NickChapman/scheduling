@@ -112,10 +112,6 @@ def round_robin(processes, time_quantum, verbose=False):
             blocked_count = 0
             # Check to see if we were idle for any period of time leading up to this
             if current_time - last_execution_time > 0:
-                # We are coming out of a blocked state and may have overestimated the current time by 1 and as a result start_time
-                if len(process_queue) > 0:
-                    current_time -= 1
-                    start_time -= 1
                 print("Idle " + str(last_execution_time) + " " + str(current_time))
             # We are in the middle of a burst
             if process_state[1] > time_quantum:
@@ -144,11 +140,13 @@ def round_robin(processes, time_quantum, verbose=False):
             if current_time - waiting_since > process_state[1] and len(process.state_queue) > 0:
                 # It became unblocked while waiting, but it back on the beginning of the queue
                 process_queue.push_front((current_time, process))
+                blocked_count = 0
                 if verbose:
                     print("unblocked")
             elif current_time - waiting_since == process_state[1] and len(process.state_queue) > 0:
                 # It is just this moment becoming unblocked, put it at the back of the queue
                 process_queue.push_back((current_time, process))
+                blocked_count = 0
                 if verbose:
                     print("unblocked")
             elif current_time - waiting_since >= process_state[1] and len(process.state_queue) == 0:
@@ -166,6 +164,7 @@ def round_robin(processes, time_quantum, verbose=False):
                 if blocked_count >= len(process_queue):
                     # All processes are blocked
                     current_time += 1
+                    blocked_count = 0
         if start_queue.not_empty and start_time != current_time:
             # Check to see if any processes arrived while we were dealing with that process
             if verbose:
@@ -187,28 +186,28 @@ def round_robin(processes, time_quantum, verbose=False):
 
 def shortest_job_first(processes, verbose=False):
     # Push all of the processes into the start queue where they will wait until they're started
-    start_queue = ProcessQueue()
+    start_state = ProcessPen()
     for process in processes:
-        start_queue.push_back((process.start, process))
-
-    # Sort processes based on start time
-    start_queue = ProcessQueue(sorted(start_queue, key=lambda x: x[0]))
-    process_queue = ProcessQueue()
-    current_time = 0
-
-    if verbose:
-        print("Time 0: Waiting for first process to arrive")
-
-    # Pull the first items out of the start queue
-    while process_queue.empty:
-        while start_queue.not_empty and start_queue.peek()[1].start == current_time:
-            process_queue.push_back(start_queue.pop_front())
-        if process_queue.empty:
-            current_time += 1
-
-    if verbose:
-        print("Time " + str(current_time) + ": Process(es) have arrived")
-        print("Current process queue: " + process_queue.single_line_string())
+        start_state.add(process)
+    #
+    # # Sort processes based on start time
+    # start_queue = ProcessQueue(sorted(start_queue, key=lambda x: x[0]))
+    # ready_queue = ProcessQueue()
+    # current_time = 0
+    #
+    # if verbose:
+    #     print("Time 0: Waiting for first process to arrive")
+    #
+    # # Pull the first items out of the start queue
+    # while ready_queue.empty:
+    #     while start_queue.not_empty and start_queue.peek()[1].start == current_time:
+    #         ready_queue.push_back(start_queue.pop_front())
+    #     if ready_queue.empty:
+    #         current_time += 1
+    #
+    # if verbose:
+    #     print("Time " + str(current_time) + ": Process(es) have arrived")
+    #     print("Current process queue: " + ready_queue.single_line_string())
 
 
 def shortest_job_remaining(processes, verbose=False):
@@ -286,18 +285,38 @@ class ProcessPen:
         else:
             return None
 
+    def get_next_ready_process(self):
+        # Returns the next process by lowest burst time and then lowest process number within that burst time category
+        shortest_burst_time = sorted(self.processes.keys())[0]
+        process = sorted(self.processes[shortest_burst_time])[0]
+        self.processes[shortest_burst_time].remove(process)
+        if len(self.processes[shortest_burst_time]) == 0:
+            del self.processes[shortest_burst_time]
+        return process
+
     def add(self, process):
-        process_state = process.state_queue.peek()[1]
-        if process_state in self.processes:
-            self.processes[process_state].append(process)
+        burst_time = process.average_burst_time
+        if burst_time in self.processes:
+            self.processes[burst_time].add(process)
         else:
-            self.processes[process_state] = [process]
+            self.processes[burst_time] = {process}
 
     def update(self, time):
         """Subtracts this amount of time from each process' first state
         Returns all of the processes that have changed states during this time
         """
-        pass
+        ready_processes = []
+        for busy_time in self.processes:
+            temp_ready = []
+            temp_busy_set = set()
+            for process in self.processes[busy_time]:
+                if process.state_queue.peek()[1] - time <= 0:
+                    # The process is no longer blocked/waiting and should move out
+                    # We remove it's current blocked state
+                    process.state_queue.pop_front()
+                    temp_ready.append(process)
+                else:
+                    process_state = process.state_queue.pop_front
 
 
 class ProcessQueue(deque):
