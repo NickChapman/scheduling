@@ -1,10 +1,8 @@
-start 10
-B 50
-I 10
-B 50
-I 1000
-B 100
-I 50
-B 100
-I 30
+start 0
+B 5
+I 2
+B 2
+B 3
+I 400
+B 10
 end

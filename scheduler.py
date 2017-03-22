@@ -118,7 +118,29 @@ def round_robin(processes, time_quantum, verbose=False):
     # Begin RR loop
     blocked_count = 0  # Number of processes in a row that have been blocked
     last_execution_time = current_time
-    while process_queue.not_empty:
+    while process_queue.not_empty or start_queue.not_empty:
+        # See if we need to load something from the start queue
+        if verbose:
+            print("Time " + str(current_time) + ": Checking if process needs to be loaded from start queue...", end="")
+        if process_queue.empty:
+            # Need to load from start queue
+            if verbose:
+                print("yes")
+                print("Time 0: Waiting for first process to arrive")
+
+            # Pull the first items out of the start queue
+            while process_queue.empty:
+                while start_queue.not_empty and start_queue.peek()[1].start == current_time:
+                    process_queue.push_back(start_queue.pop_front())
+                if process_queue.empty:
+                    current_time += 1
+
+            if verbose:
+                print("Time " + str(current_time) + ": Process(es) have arrived")
+                print("Current process queue: " + process_queue.single_line_string())
+        else:
+            if verbose:
+                print("no")
         start_time = current_time
         waiting_since, process = process_queue.pop_front()
         process_state = process.state_queue.pop_front()
@@ -230,7 +252,7 @@ def shortest_job_first(processes, verbose=False):
 
     # Begin main loop
     last_execution_time = current_time
-    while ready_state.not_empty or blocked_state.not_empty:
+    while ready_state.not_empty or blocked_state.not_empty or start_state.not_empty:
         start_time = current_time
         # Let's first see if we have something that we can run
         if verbose:
@@ -320,8 +342,156 @@ def shortest_job_first(processes, verbose=False):
                     print_states(start_state, ready_state, blocked_state)
     print("end")
 
+
 def shortest_job_remaining(processes, verbose=False):
-    return
+    current_time = 0
+    # Push all of the processes into the start queue where they will wait until they're started
+    start_state = StartPool()
+    for process in processes:
+        start_state.add(process)
+
+    # Create our states used for the actual running of the algorithm
+    ready_state = ReadyPool()
+    blocked_state = BlockedPool()
+
+    if verbose:
+        print("Time 0: Waiting for first process to arrive")
+    while ready_state.empty:
+        # We need to go and get some processes
+        ready_processes = start_state.get_ready_processes(current_time)
+        if not ready_processes:
+            # There are no ready processes in this case
+            current_time += 1
+        else:
+            for process in ready_processes:
+                process.start_process()
+                ready_state.add(process)
+    if verbose:
+        print("Time " + str(current_time) + ": Process(es) have arrived")
+        print_states(start_state, ready_state, blocked_state)
+
+    if current_time != 0:
+        print("Idle 0 " + str(current_time))
+
+    # Begin main loop
+    last_execution_time = current_time
+    while ready_state.not_empty or blocked_state.not_empty or start_state.not_empty:
+        start_time = current_time
+        # Let's see if anything can run
+        if verbose:
+            print("Time " + str(current_time) + ": checking if any processes are ready...", end="")
+        if ready_state.not_empty:
+            # We can run something
+            process = ready_state.get_next_ready_process()
+            if verbose:
+                print("yes. Running " + str(process))
+            # Check if we were idle and if we were then print that
+            if last_execution_time - current_time != 0:
+                print("Idle " + str(last_execution_time) + " " + str(current_time))
+            # We are going to run this process 1 time step at a time to see if anything better comes along
+            changed = False
+            while not changed:
+                burst_completed = process.run_partial_burst(1)
+                current_time += 1
+                last_execution_time = current_time
+                if burst_completed:
+                    changed = True
+                    break
+                else:
+                    # Put the process back into the ready state
+                    ready_state.add(process)
+                # Update the time by 1 and update the ready state from the blocked and start states
+                if verbose:
+                    print("Time " + str(
+                        current_time) + ": Checking if any processes need to move from blocked to ready...", end="")
+                ready_processes = blocked_state.update(1)
+                if ready_processes:
+                    if verbose:
+                        print("yes")
+                        print("Time " + str(current_time) + ": Adding " + str(len(ready_processes)) + " to ready state")
+                    for ready_process in ready_processes:
+                        ready_state.add(ready_process)
+                else:
+                    if verbose:
+                        print("no")
+                if verbose:
+                    print("Time " + str(
+                        current_time) + ": Checking if any processes need to move from start to ready...", end="")
+                ready_processes = start_state.get_ready_processes(current_time)
+                if ready_processes:
+                    if verbose:
+                        print("yes")
+                        print("Time " + str(current_time) + ": Adding " + str(len(ready_processes)) + " to ready state")
+                    for ready_process in ready_processes:
+                        ready_process.start_process()
+                        ready_state.add(ready_process)
+                else:
+                    if verbose:
+                        print("no")
+                if verbose:
+                    print("Time " + str(current_time) + ":")
+                    print_states(start_state, ready_state, blocked_state)
+                    print("Time " + str(current_time) + ": Checking if we continue with same process as before...",
+                      end="")
+                new_process = ready_state.get_next_ready_process()
+                if new_process.process_number != process.process_number:
+                    changed = True
+                    # Put it back in the pool to get out in a second
+                    ready_state.add(new_process)
+                    if verbose:
+                        print("no")
+                else:
+                    if verbose:
+                        print("yes")
+                    process = new_process
+            print(str(process) + " " + str(start_time) + " " + str(current_time))
+            if process.state_queue.empty:
+                if verbose:
+                    print("Time " + str(current_time) + ": " + str(process) + " finished")
+            else:
+                if process.state_queue.peek()[0] == "B":
+                    if verbose:
+                        print("Time " + str(current_time) + ": Moving " + str(process) + " to ready state")
+                    ready_state.add(process)
+                else:
+                    if verbose:
+                        print("Time " + str(current_time) + ": Moving " + str(process) + " to blocked state")
+                    blocked_state.add(process)
+        else:
+            # The ready state is empty so we need to step in time and see if we can free anything
+            current_time += 1
+            if verbose:
+                print("Time " + str(
+                    current_time) + ": Checking if any processes need to move from blocked to ready...", end="")
+            ready_processes = blocked_state.update(1)
+            if ready_processes:
+                if verbose:
+                    print("yes")
+                    print("Time " + str(current_time) + ": Adding " + str(len(ready_processes)) + " to ready state")
+                for ready_process in ready_processes:
+                    ready_state.add(ready_process)
+            else:
+                if verbose:
+                    print("no")
+            if verbose:
+                print("Time " + str(
+                    current_time) + ": Checking if any processes need to move from start to ready...", end="")
+            ready_processes = start_state.get_ready_processes(current_time)
+            if ready_processes:
+                if verbose:
+                    print("yes")
+                    print("Time " + str(current_time) + ": Adding " + str(len(ready_processes)) + " to ready state")
+                for ready_process in ready_processes:
+                    ready_process.start_process()
+                    ready_state.add(ready_process)
+            else:
+                if verbose:
+                    print("no")
+            if verbose:
+                print("Time " + str(current_time) + ":")
+                print_states(start_state, ready_state, blocked_state)
+
+    print("end")
 
 
 # PROCESS CLASS
@@ -337,6 +507,7 @@ class Process:
         # We'll check to see if we can do better when we start them
         self.average_burst_time = float("inf")
         self.burst_count = 0
+        self.partial_burst_time = 0
         with open(self.process_file, 'r') as f:
             try:
                 self.start = -1
@@ -388,6 +559,32 @@ class Process:
         global_burst_count[0] += 1
         return burst_time
 
+    @property
+    def average_burst_remaining(self):
+        return self.average_burst_time - self.partial_burst_time
+
+    def run_partial_burst(self, time):
+        # Runs the top burst in its state_queue for the specified time
+        # Returns False when it finishes a burst, True when it doesn't
+        state = self.state_queue.pop_front()
+        # Check if stepping forward this amount of time will finish the burst
+        if state[1] - time <= 0:
+            # This partial burst will finish this thing
+            self.partial_burst_time += state[1]
+            self.average_burst_time = ((self.average_burst_time * self.burst_count) + self.partial_burst_time) / (
+                self.burst_count + 1)
+            self.burst_count += 1
+            global_average_burst_time[0] = ((global_average_burst_time[0] * global_burst_count[
+                0]) + self.partial_burst_time) / (global_burst_count[0] + 1)
+            global_burst_count[0] += 1
+            self.partial_burst_time = 0
+            return True
+        else:
+            # We won't finish the burst in this partial run so put the burst back into the queue for a later time
+            self.partial_burst_time += time
+            self.state_queue.push_front((state[0], state[1] - time))
+            return False
+
     def __lt__(self, other):
         return self.process_number < other.process_number
 
@@ -414,7 +611,7 @@ class ReadyPool:
         return process
 
     def add(self, process):
-        burst_time = process.average_burst_time
+        burst_time = process.average_burst_remaining
         if burst_time in self.processes:
             self.processes[burst_time].add(process)
         else:

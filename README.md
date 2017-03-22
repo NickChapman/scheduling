@@ -6,6 +6,12 @@ To run this program refer to the following:
 Usage: python <scheduling algorithm> [optional algorithm parameter] [verbose] <process time file n>*
 ```
 
+NB: If your default version of python 2, you will need to use:
+
+```
+Usage: python3 <scheduling algorithm> [optional algorithm parameter] [verbose] <process time file n>*
+```
+
 Allowed scheduling algorithms:
  * `RR` - Round Robin
      * Requires the optional algorithm parameter which is the time quantum (must be an integer)
