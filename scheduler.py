@@ -87,36 +87,128 @@ def round_robin(processes, time_quantum, verbose=False):
     process_queue = ProcessQueue()
     current_time = 0
 
+    if verbose:
+        print("Time 0: Waiting for first process to arrive")
+
     # Pull the first items out of the start queue
     while process_queue.empty:
         while start_queue.not_empty and start_queue.peek()[1].start == current_time:
-            process_queue.push_back(start_queue.popleft())
-        current_time += 1
+            process_queue.push_back(start_queue.pop_front())
+        if process_queue.empty:
+            current_time += 1
+
+    if verbose:
+        print("Time " + str(current_time) + ": Process(es) have arrived")
+        print("Current process queue: " + process_queue.single_line_string())
 
     # Begin RR loop
+    blocked_count = 0  # Number of processes in a row that have been blocked
+    last_execution_time = current_time
     while process_queue.not_empty:
         start_time = current_time
-        process = process_queue.pop_front()
+        waiting_since, process = process_queue.pop_front()
         process_state = process.state_queue.pop_front()
         if process_state[0] == "B":
+            blocked_count = 0
+            # Check to see if we were idle for any period of time leading up to this
+            if current_time - last_execution_time > 0:
+                # We are coming out of a blocked state and may have overestimated the current time by 1 and as a result start_time
+                if len(process_queue) > 0:
+                    current_time -= 1
+                    start_time -= 1
+                print("Idle " + str(last_execution_time) + " " + str(current_time))
             # We are in the middle of a burst
             if process_state[1] > time_quantum:
                 process.state_queue.push_front(("B", process_state[1] - time_quantum))
                 current_time += time_quantum
-
                 print(str(process.process_number) + " " + str(start_time) + " " + str(current_time))
             elif process_state[1] == time_quantum:
-
-        # If nothing new has shown up while we finished processing this
-        process_queue.push_back((current_time, process))
-
-    print(process_queue.single_line_string())
+                current_time += time_quantum
+                print(str(process.process_number) + " " + str(start_time) + " " + str(current_time))
+            else:
+                # The whole burst isn't needed
+                current_time += process_state[1]
+                print(str(process.process_number) + " " + str(start_time) + " " + str(current_time))
+            last_execution_time = current_time
+            # If the process has more work to do put it back into the queue
+            if process.state_queue.not_empty:
+                process_queue.push_back((current_time, process))
+            else:
+                # The process has finished
+                if verbose:
+                    print("Time " + str(current_time) + ": " + str(process) + " finished")
+        else:
+            # First check to see if it has waited long enough to no longer be blocked
+            if verbose:
+                print("Time " + str(current_time) + ": Determining if " + str(process) + " is blocked...", end="")
+            if current_time - waiting_since > process_state[1] and len(process.state_queue) > 0:
+                # It became unblocked while waiting, but it back on the beginning of the queue
+                process_queue.push_front((current_time, process))
+                if verbose:
+                    print("unblocked")
+            elif current_time - waiting_since == process_state[1] and len(process.state_queue) > 0:
+                # It is just this moment becoming unblocked, put it at the back of the queue
+                process_queue.push_back((current_time, process))
+                if verbose:
+                    print("unblocked")
+            elif current_time - waiting_since >= process_state[1] and len(process.state_queue) == 0:
+                # The process finished on an IO request and do nothing
+                if verbose:
+                    print("unblocked and process finished")
+            else:
+                # It hasn't waited long enough and yields its turn
+                if verbose:
+                    print("blocked")
+                # Put this state back into its state queue
+                process.state_queue.push_front(process_state)
+                process_queue.push_back((waiting_since, process))
+                blocked_count += 1
+                if blocked_count >= len(process_queue):
+                    # All processes are blocked
+                    current_time += 1
+        if start_queue.not_empty and start_time != current_time:
+            # Check to see if any processes arrived while we were dealing with that process
+            if verbose:
+                print("Time " + str(current_time) + ": Checking to see if new processes arrived while running burst...",
+                      end="")
+            new_procs = False
+            while start_queue.not_empty and start_queue.peek()[1].start <= current_time:
+                process_queue.push_back(start_queue.pop_front())
+                new_procs = True
+            if verbose:
+                if new_procs:
+                    print("yes")
+                else:
+                    print("no")
+            if verbose:
+                print("Time " + str(current_time) + ": Current process queue: " + process_queue.single_line_string())
     print("end")
 
 
-
 def shortest_job_first(processes, verbose=False):
-    return
+    # Push all of the processes into the start queue where they will wait until they're started
+    start_queue = ProcessQueue()
+    for process in processes:
+        start_queue.push_back((process.start, process))
+
+    # Sort processes based on start time
+    start_queue = ProcessQueue(sorted(start_queue, key=lambda x: x[0]))
+    process_queue = ProcessQueue()
+    current_time = 0
+
+    if verbose:
+        print("Time 0: Waiting for first process to arrive")
+
+    # Pull the first items out of the start queue
+    while process_queue.empty:
+        while start_queue.not_empty and start_queue.peek()[1].start == current_time:
+            process_queue.push_back(start_queue.pop_front())
+        if process_queue.empty:
+            current_time += 1
+
+    if verbose:
+        print("Time " + str(current_time) + ": Process(es) have arrived")
+        print("Current process queue: " + process_queue.single_line_string())
 
 
 def shortest_job_remaining(processes, verbose=False):
@@ -245,6 +337,8 @@ class ProcessQueue(deque):
             print(self[i])
 
     def single_line_string(self):
+        if len(self) == 0:
+            return "[]"
         s = "["
         for i in range(len(self)):
             s += str(self[i][1]) + ", "
