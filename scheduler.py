@@ -444,7 +444,7 @@ def shortest_job_remaining(processes, verbose=False):
                     if verbose:
                         print("yes")
                     process = new_process
-            print(str(process) + " " + str(start_time) + " " + str(current_time))
+            print(str(process.process_number) + " " + str(start_time) + " " + str(current_time))
             if process.state_queue.empty:
                 if verbose:
                     print("Time " + str(current_time) + ": " + str(process) + " finished")
