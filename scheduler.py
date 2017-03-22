@@ -112,6 +112,8 @@ def round_robin(processes, time_quantum, verbose=False):
     if verbose:
         print("Time " + str(current_time) + ": Process(es) have arrived")
         print("Current process queue: " + process_queue.single_line_string())
+    if current_time != 0:
+        print("Idle 0 " + str(current_time))
 
     # Begin RR loop
     blocked_count = 0  # Number of processes in a row that have been blocked
@@ -212,21 +214,24 @@ def shortest_job_first(processes, verbose=False):
     while ready_state.empty:
         # We need to go and get some processes
         ready_processes = start_state.get_ready_processes(current_time)
-        if ready_processes == []:
+        if not ready_processes:
             # There are no ready processes in this case
             current_time += 1
         else:
-            print(ready_processes)
             for process in ready_processes:
                 process.start_process()
-                print(process)
                 ready_state.add(process)
     if verbose:
         print("Time " + str(current_time) + ": Process(es) have arrived")
         print_states(start_state, ready_state, blocked_state)
 
+    if current_time != 0:
+        print("Idle 0 " + str(current_time))
+
     # Begin main loop
+    last_execution_time = current_time
     while ready_state.not_empty or blocked_state.not_empty:
+        start_time = current_time
         # Let's first see if we have something that we can run
         if verbose:
             print("Time " + str(current_time) + ": checking if any processes are ready...", end="")
@@ -235,11 +240,85 @@ def shortest_job_first(processes, verbose=False):
             process = ready_state.get_next_ready_process()
             if verbose:
                 print("yes. Running " + str(process))
+            if last_execution_time != current_time:
+                print("Idle " + str(last_execution_time) + " " + str(current_time))
             burst_time = process.run_full_burst()
+            # Update the blocked state to reflect this burst happening
+            if verbose:
+                print("Time " + str(current_time) + ": Updating blocked state to reflect completion of burst")
+            ready_processes = blocked_state.update(burst_time)
+            if verbose:
+                print("Time " + str(current_time) + ": Adding " + str(
+                    len(ready_processes)) + " process(es) to the ready state")
+            for ready_process in ready_processes:
+                if ready_process.state_queue.empty:
+                    if verbose:
+                        print("Time " + str(current_time) + ": " + str(ready_process) + " finished")
+                else:
+                    ready_state.add(ready_process)
+            current_time += burst_time
+            last_execution_time = current_time
+            print(str(process.process_number) + " " + str(start_time) + " " + str(current_time))
+            # Now put the process into the appropriate pool or let it die since it is finished
+            if process.state_queue.empty:
+                # The process has finished everything it needs to do
+                if verbose:
+                    print("Time " + str(current_time) + ": " + str(process) + " finished")
+            elif process.state_queue.peek()[0] == "B":
+                # Another burst is queued up for some reason (this is dumb but whatever)
+                if verbose:
+                    print("Time " + str(current_time) + ": " + str(process) + " moved to ready state")
+                ready_state.add(process)
+            else:
+                # It must now be blocked
+                if verbose:
+                    print("Time " + str(current_time) + ": " + str(process) + " moved to blocked state")
+                blocked_state.add(process)
+            if verbose:
+                print("Time " + str(current_time) + ":")
+                print_states(start_state, ready_state, blocked_state)
         else:
+            # If we reach here that means nothing is ready yet
+            # Let's update the blocked pool and see if something comes out
             if verbose:
                 print("no")
-
+                print_states(start_state, ready_state, blocked_state)
+            current_time += 1
+            if verbose:
+                print("Time " + str(current_time) + ": Updating blocked state for timestep of 1")
+            ready_processes = blocked_state.update(1)
+            if verbose:
+                print("Time " + str(current_time) + ": Adding " + str(
+                    len(ready_processes)) + " process(es) to the ready state")
+            for ready_process in ready_processes:
+                if ready_process.state_queue.empty:
+                    if verbose:
+                        print("Time " + str(current_time) + ": " + str(ready_process) + " finished")
+                else:
+                    ready_state.add(ready_process)
+            if verbose:
+                print("Time " + str(current_time) + ":")
+                print_states(start_state, ready_state, blocked_state)
+        # Finally check whether we need to add in any potentially started states
+        if start_state.not_empty:
+            if verbose:
+                print("Time " + str(current_time) + ": Checking if any new processes started...", end="")
+            ready_processes = start_state.get_ready_processes(current_time)
+            if not ready_processes:
+                if verbose:
+                    print("no")
+            else:
+                if verbose:
+                    print("yes")
+                    print("Time " + str(current_time) + ": Adding " + str(
+                        len(ready_processes)) + " process(es) to ready state")
+                for process in ready_processes:
+                    process.start_process()
+                    ready_state.add(process)
+                if verbose:
+                    print("Time " + str(current_time) + ":")
+                    print_states(start_state, ready_state, blocked_state)
+    print("end")
 
 def shortest_job_remaining(processes, verbose=False):
     return
