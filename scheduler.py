@@ -432,7 +432,7 @@ def shortest_job_remaining(processes, verbose=False):
                     print("Time " + str(current_time) + ":")
                     print_states(start_state, ready_state, blocked_state)
                     print("Time " + str(current_time) + ": Checking if we continue with same process as before...",
-                      end="")
+                          end="")
                 new_process = ready_state.get_next_ready_process()
                 if new_process.process_number != process.process_number:
                     changed = True
