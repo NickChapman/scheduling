@@ -10,11 +10,18 @@ import os
 import queue
 from collections import deque
 
-# CONSTANTS
+# CONSTANTS and GLOBAL VALUES
 
 allowed_algos = ["RR", "SJF", "SJR"]
-global_average_burst_time = 0
-burst_count = 0
+global_average_burst_time = [0]
+global_burst_count = [0]
+
+
+# HELPERS
+
+def print_states(*states):
+    for state in states:
+        print(state)
 
 
 # PROGRAM CONTROL
@@ -61,6 +68,11 @@ def main():
         usage_error()
     # We have parsed the arguments without error
     processes = [Process(process_file) for process_file in process_files]
+    # Check to make sure that none of the processes start out blocked since that would be an error
+    for process in processes:
+        if process.state_queue.peek()[0] == "I":
+            print("Process " + str(process.process_number) + " starts in a blocked state which is nonsensical!")
+            exit(1)
     if algorithm == "RR":
         round_robin(processes, time_quantum, verbose)
     elif algorithm == "SJF":
@@ -185,29 +197,48 @@ def round_robin(processes, time_quantum, verbose=False):
 
 
 def shortest_job_first(processes, verbose=False):
+    current_time = 0
     # Push all of the processes into the start queue where they will wait until they're started
-    start_state = ProcessPen()
+    start_state = StartPool()
     for process in processes:
         start_state.add(process)
-    #
-    # # Sort processes based on start time
-    # start_queue = ProcessQueue(sorted(start_queue, key=lambda x: x[0]))
-    # ready_queue = ProcessQueue()
-    # current_time = 0
-    #
-    # if verbose:
-    #     print("Time 0: Waiting for first process to arrive")
-    #
-    # # Pull the first items out of the start queue
-    # while ready_queue.empty:
-    #     while start_queue.not_empty and start_queue.peek()[1].start == current_time:
-    #         ready_queue.push_back(start_queue.pop_front())
-    #     if ready_queue.empty:
-    #         current_time += 1
-    #
-    # if verbose:
-    #     print("Time " + str(current_time) + ": Process(es) have arrived")
-    #     print("Current process queue: " + ready_queue.single_line_string())
+
+    # Create our states used for the actual running of the algorithm
+    ready_state = ReadyPool()
+    blocked_state = BlockedPool()
+
+    if verbose:
+        print("Time 0: Waiting for first process to arrive")
+    while ready_state.empty:
+        # We need to go and get some processes
+        ready_processes = start_state.get_ready_processes(current_time)
+        if ready_processes == []:
+            # There are no ready processes in this case
+            current_time += 1
+        else:
+            print(ready_processes)
+            for process in ready_processes:
+                process.start_process()
+                print(process)
+                ready_state.add(process)
+    if verbose:
+        print("Time " + str(current_time) + ": Process(es) have arrived")
+        print_states(start_state, ready_state, blocked_state)
+
+    # Begin main loop
+    while ready_state.not_empty or blocked_state.not_empty:
+        # Let's first see if we have something that we can run
+        if verbose:
+            print("Time " + str(current_time) + ": checking if any processes are ready...", end="")
+        if ready_state.not_empty:
+            # We can run something
+            process = ready_state.get_next_ready_process()
+            if verbose:
+                print("yes. Running " + str(process))
+            burst_time = process.run_full_burst()
+        else:
+            if verbose:
+                print("no")
 
 
 def shortest_job_remaining(processes, verbose=False):
@@ -261,9 +292,22 @@ class Process:
             print("The process file \"" + process_file + "\" could not be found.", file=sys.stderr)
 
     def start_process(self):
-        if global_average_burst_time != 0:
-            self.average_burst_time = global_average_burst_time
+        if global_average_burst_time[0] != 0:
+            self.average_burst_time = global_average_burst_time[0]
             self.burst_count = 1
+        else:
+            # This will only be triggered by the first things ever run and it won't matter
+            # run_full_burst will correctly update them
+            self.average_burst_time = 100
+
+    def run_full_burst(self):
+        burst_time = self.state_queue.pop_front()[1]
+        self.average_burst_time = ((self.average_burst_time * self.burst_count) + burst_time) / (self.burst_count + 1)
+        self.burst_count += 1
+        global_average_burst_time[0] = ((global_average_burst_time[0] * global_burst_count[0]) + burst_time) / (
+            global_burst_count[0] + 1)
+        global_burst_count[0] += 1
+        return burst_time
 
     def __lt__(self, other):
         return self.process_number < other.process_number
@@ -275,17 +319,13 @@ class Process:
         return "Process " + str(self.process_number)
 
 
-class ProcessPen:
+class ReadyPool:
     def __init__(self):
         self.processes = {}
 
-    def get(self, key):
-        if key in self.processes:
-            return self.processes[key]
-        else:
-            return None
-
     def get_next_ready_process(self):
+        if self.empty:
+            return None
         # Returns the next process by lowest burst time and then lowest process number within that burst time category
         shortest_burst_time = sorted(self.processes.keys())[0]
         process = sorted(self.processes[shortest_burst_time])[0]
@@ -301,22 +341,113 @@ class ProcessPen:
         else:
             self.processes[burst_time] = {process}
 
+    @property
+    def empty(self):
+        return len(self.processes) == 0
+
+    @property
+    def not_empty(self):
+        return not self.empty
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __str__(self):
+        s = "Ready state:"
+        if len(self.processes) == 0:
+            s += "\n\t **EMPTY**"
+        else:
+            for burst_time in self.processes:
+                for process in self.processes[burst_time]:
+                    s += "\n\t" + str(process) + ": " + str(burst_time)
+        return s
+
+
+class BlockedPool:
+    def __init__(self):
+        self.processes = []
+
+    def add(self, process):
+        self.processes.append(process)
+
     def update(self, time):
-        """Subtracts this amount of time from each process' first state
-        Returns all of the processes that have changed states during this time
-        """
         ready_processes = []
-        for busy_time in self.processes:
-            temp_ready = []
-            temp_busy_set = set()
-            for process in self.processes[busy_time]:
-                if process.state_queue.peek()[1] - time <= 0:
-                    # The process is no longer blocked/waiting and should move out
-                    # We remove it's current blocked state
-                    process.state_queue.pop_front()
-                    temp_ready.append(process)
-                else:
-                    process_state = process.state_queue.pop_front
+        new_process_list = []
+        for process in self.processes:
+            if process.state_queue.peek()[1] - time <= 0:
+                # The process is no longer blocked/waiting and should move out
+                # We remove it's current blocked state
+                process.state_queue.pop_front()
+                ready_processes.append(process)
+            else:
+                process_state = process.state_queue.pop_front()
+                process.state_queue.push_front((process_state[0], process_state[1] - time))
+                new_process_list.append(process)
+        self.processes = new_process_list
+        return ready_processes
+
+    @property
+    def empty(self):
+        return len(self.processes) == 0
+
+    @property
+    def not_empty(self):
+        return not self.empty
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __str__(self):
+        s = "Blocked state:"
+        if len(self.processes) == 0:
+            s += "\n\t**EMPTY**"
+        else:
+            for process in self.processes:
+                s += "\n\t" + str(process) + ": " + str(process.average_burst_time)
+        return s
+
+
+class StartPool:
+    def __init__(self):
+        self.processes = {}
+
+    def add(self, process):
+        if process.start in self.processes:
+            self.processes.append(process)
+        else:
+            self.processes[process.start] = [process]
+
+    def get_ready_processes(self, current_time):
+        ready_processes = []
+        for start_time in self.processes:
+            if start_time <= current_time:
+                ready_processes += self.processes[start_time]
+        # Now we clean up the start times that are no longer relevant
+        for start_time in list(self.processes.keys()):
+            if start_time <= current_time:
+                del self.processes[start_time]
+        return ready_processes
+
+    @property
+    def empty(self):
+        return len(self.processes) == 0
+
+    @property
+    def not_empty(self):
+        return not self.empty
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __str__(self):
+        s = "Start State:"
+        if len(self.processes) == 0:
+            s += "\n\t**EMPTY**"
+        else:
+            for start_time in self.processes:
+                for process in self.processes[start_time]:
+                    s += "\n\t" + str(process) + ": " + str(process.average_burst_time)
+        return s
 
 
 class ProcessQueue(deque):
@@ -351,7 +482,6 @@ class ProcessQueue(deque):
         self.append(item)
 
     def print(self):
-        temp = ProcessQueue()
         for i in range(len(self)):
             print(self[i])
 
